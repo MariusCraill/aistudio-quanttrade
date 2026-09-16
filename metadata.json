@@ -1,0 +1,6 @@
+{
+  "name": "TradeQuant: Quantitative Trade Analyzer & Backtest Engine",
+  "description": "Automated trade scanner, standardized entry/exit criteria, Kelly position sizing, target duration forecasting, AI portfolio suitability ranking, real-time ATR volatility surge alerts, and continuous backtest engine for JSE and US equities using real live market data and exchange session tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
