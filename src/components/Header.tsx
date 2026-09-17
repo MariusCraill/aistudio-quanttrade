@@ -11,9 +11,11 @@ import {
   CheckCircle,
   AlertCircle,
   Zap,
+  ExternalLink,
 } from 'lucide-react';
 import { MarketStatusInfo } from '../types';
 import { calculateMarketStatus } from '../services/marketDataService';
+import { getYahooFinanceChartUrl } from '../utils/marketUrls';
 
 export interface HeaderAssetOption {
   symbol: string;
@@ -225,6 +227,19 @@ export default function Header({
               ))}
             </select>
           </div>
+
+          {/* Yahoo Finance Chart Quick Button */}
+          <a
+            href={getYahooFinanceChartUrl(selectedSymbol)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${selectedSymbol} interactive chart on Yahoo Finance`}
+            className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg border border-purple-900/60 bg-purple-950/50 hover:bg-purple-900/70 text-purple-300 hover:text-purple-100 text-xs font-mono transition-colors"
+          >
+            <span className="font-black text-[10px] bg-purple-600 text-white px-1 rounded leading-tight">Y!</span>
+            <span className="hidden xl:inline text-[11px]">Yahoo Chart</span>
+            <ExternalLink className="w-3 h-3 text-purple-400" />
+          </a>
 
           {/* Custom Search Form */}
           <form onSubmit={handleCustomSearchSubmit} className="hidden sm:flex items-center">

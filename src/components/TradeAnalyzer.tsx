@@ -33,7 +33,9 @@ import {
   RefreshCw,
   Zap,
   Flame,
+  ExternalLink,
 } from 'lucide-react';
+import { getYahooFinanceChartUrl } from '../utils/marketUrls';
 
 interface TradeAnalyzerProps {
   setup: TradeSetup | null;
@@ -228,9 +230,24 @@ export default function TradeAnalyzer({
               </span>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/60 text-rose-200 text-[11px] font-bold shrink-0">
-            STAGE FOR MARKET OPEN
-          </span>
+          <div className="flex items-center gap-2">
+            {setup?.symbol && (
+              <a
+                href={getYahooFinanceChartUrl(setup.symbol)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open ${setup.symbol} chart in Yahoo Finance`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-purple-950/70 hover:bg-purple-900 border border-purple-800 text-purple-300 hover:text-purple-100 text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                <span className="font-black text-[10px] bg-purple-600 text-white px-1 rounded">Y!</span>
+                <span>Yahoo Chart</span>
+                <ExternalLink className="w-3 h-3 text-purple-400" />
+              </a>
+            )}
+            <span className="px-2.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/60 text-rose-200 text-[11px] font-bold shrink-0">
+              STAGE FOR MARKET OPEN
+            </span>
+          </div>
         </div>
       ) : (
         <div className="p-3 bg-emerald-950/30 border border-emerald-800/60 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
@@ -241,9 +258,24 @@ export default function TradeAnalyzer({
               <span>Live trading session active for {setup?.symbol}. Real-time execution parameters and live pricing.</span>
             </div>
           </div>
-          <span className="px-2.5 py-0.5 rounded bg-emerald-900/60 border border-emerald-700/60 text-emerald-200 text-[11px] font-bold shrink-0 animate-pulse">
-            LIVE SESSION ACTIVE
-          </span>
+          <div className="flex items-center gap-2">
+            {setup?.symbol && (
+              <a
+                href={getYahooFinanceChartUrl(setup.symbol)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open ${setup.symbol} chart in Yahoo Finance`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-purple-950/70 hover:bg-purple-900 border border-purple-800 text-purple-300 hover:text-purple-100 text-[11px] font-semibold transition-colors cursor-pointer"
+              >
+                <span className="font-black text-[10px] bg-purple-600 text-white px-1 rounded">Y!</span>
+                <span>Yahoo Chart</span>
+                <ExternalLink className="w-3 h-3 text-purple-400" />
+              </a>
+            )}
+            <span className="px-2.5 py-0.5 rounded bg-emerald-900/60 border border-emerald-700/60 text-emerald-200 text-[11px] font-bold shrink-0 animate-pulse">
+              LIVE SESSION ACTIVE
+            </span>
+          </div>
         </div>
       )}
 

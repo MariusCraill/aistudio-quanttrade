@@ -153,9 +153,10 @@ app.get('/api/market/candles/:symbol', async (req, res) => {
     // If JSE and symbol does not have .JO, we could normalize or use as-is
     const symbol = rawSymbol.toUpperCase();
     const cacheKey = `candles_${symbol}`;
+    const forceRefresh = req.query.refresh === 'true' || req.query.force === 'true';
 
     const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_CANDLES) {
+    if (!forceRefresh && cached && Date.now() - cached.timestamp < CACHE_TTL_CANDLES) {
       return res.json(cached.data);
     }
 
@@ -366,6 +367,7 @@ const MONITORED_VOLATILITY_UNIVERSE = [
 app.get('/api/market/volatility-alerts', async (req, res) => {
   try {
     const rawSymbols = req.query.symbols as string | undefined;
+    const forceRefresh = req.query.refresh === 'true' || req.query.force === 'true';
     const symbols = rawSymbols
       ? rawSymbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
       : MONITORED_VOLATILITY_UNIVERSE;
@@ -376,7 +378,7 @@ app.get('/api/market/volatility-alerts', async (req, res) => {
     for (const sym of symbols) {
       try {
         const cacheKey = `candles_${sym}`;
-        let candlesData = cache.get(cacheKey)?.data;
+        let candlesData = !forceRefresh ? cache.get(cacheKey)?.data : undefined;
 
         if (!candlesData) {
           const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`;
@@ -515,8 +517,8 @@ app.get('/api/market/volatility-alerts', async (req, res) => {
   }
 });
 
-// Helper for wrapping external promises with a timeout
-function withTimeout<T>(promise: Promise<T>, ms = 3500): Promise<T> {
+// Helper for wrapping external promises with a timeout (default 15s for LLM generation)
+function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`Operation timed out after ${ms}ms`)), ms);
@@ -603,7 +605,7 @@ Provide:
               },
             },
           }),
-          3500
+          15000
         );
 
         const parsed = JSON.parse(aiResponse.text || '{}');
@@ -612,8 +614,9 @@ Provide:
           timestamp: new Date().toISOString(),
           isAiGenerated: true,
         });
-      } catch (geminiErr) {
-        console.warn('Gemini generateContent error, using fallback:', geminiErr);
+      } catch (geminiErr: any) {
+        const errMsg = geminiErr?.message || String(geminiErr);
+        console.warn('Gemini analyze-setup notice, applying quantitative fallback:', errMsg);
         // Fall through to quantitative fallback below
       }
     }
@@ -679,18 +682,18 @@ app.post('/api/ai/rank-options', async (req, res) => {
 
     if (ai && setups.length > 0) {
       try {
-        const simplifiedSetups = setups.slice(0, 10).map((s: any) => ({
+        const simplifiedSetups = setups.slice(0, 8).map((s: any) => ({
           symbol: s.symbol,
           name: s.name,
           exchange: s.exchange,
           setupType: s.setupType,
-          rewardToRisk: s.rewardToRisk,
-          trendScore: s.trendQualityScore,
-          confluenceScore: s.confluenceScore,
-          atrPercent: s.atrPercent,
+          rewardToRisk: Number((s.rewardToRisk || 2).toFixed(2)),
+          trendScore: s.trendQualityScore || 70,
+          confluenceScore: s.confluenceScore || 70,
+          atrPercent: Number((s.atrPercent || 2.5).toFixed(1)),
         }));
 
-        const prompt = `Evaluate and rank these trade options from best to worst.
+        const prompt = `Evaluate and rank these trade options from best to worst based on expected value, confluence, and risk management.
 Options: ${JSON.stringify(simplifiedSetups)}
 
 For each, provide:
@@ -707,7 +710,7 @@ For each, provide:
             model: 'gemini-3.8-flash',
             contents: prompt,
             config: {
-              systemInstruction: 'You are a quantitative portfolio manager ranking trade options based on expected value, trend quality, and risk management.',
+              systemInstruction: 'You are an elite quantitative portfolio manager ranking trade options based on expected value, trend quality, and risk management.',
               responseMimeType: 'application/json',
               responseSchema: {
                 type: Type.ARRAY,
@@ -728,14 +731,29 @@ For each, provide:
               },
             },
           }),
-          3500
+          15000
         );
 
         const parsed = JSON.parse(aiResponse.text || '[]');
-        return res.json({ ranked: parsed, isAiGenerated: true });
-      } catch (geminiErr) {
-        console.warn('Gemini rank options error, falling back:', geminiErr);
-        // Fall through to fallback below
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const setupMap = new Map(setups.map((s: any) => [s.symbol, s]));
+          const enriched = parsed.map((item: any) => {
+            const orig = setupMap.get(item.symbol);
+            return {
+              ...item,
+              name: orig?.name || item.symbol,
+              exchange: orig?.exchange || 'US',
+              currencySymbol: orig?.currencySymbol || (orig?.exchange === 'JSE' ? 'R' : '$'),
+              setupType: orig?.setupType || 'PULLBACK_SUPPORT',
+              rewardToRisk: orig?.rewardToRisk || 2.0,
+            };
+          });
+          return res.json({ ranked: enriched, isAiGenerated: true });
+        }
+      } catch (geminiErr: any) {
+        const errMsg = geminiErr?.message || String(geminiErr);
+        console.warn('Gemini rank-options notice, applying quantitative fallback:', errMsg);
+        // Fall through to quantitative fallback below
       }
     }
 

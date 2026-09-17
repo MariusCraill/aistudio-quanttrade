@@ -122,8 +122,11 @@ export function dismissAlert(id: string): void {
  * 1. Queries `/api/market/volatility-alerts` for real live exchange data
  * 2. Falls back seamlessly to real recorded dataset if network is offline
  */
-export async function fetchLiveVolatilityAlerts(symbols?: string[]): Promise<VolatilityRadarReport> {
-  const query = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(','))}` : '';
+export async function fetchLiveVolatilityAlerts(symbols?: string[], refresh = false): Promise<VolatilityRadarReport> {
+  const params = new URLSearchParams();
+  if (symbols && symbols.length > 0) params.append('symbols', symbols.join(','));
+  if (refresh) params.append('refresh', 'true');
+  const query = params.toString() ? `?${params.toString()}` : '';
 
   try {
     const res = await fetch(`/api/market/volatility-alerts${query}`);

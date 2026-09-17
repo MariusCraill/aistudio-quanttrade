@@ -11,7 +11,8 @@ import {
 } from 'lightweight-charts';
 import { CandleData, TradeSetup } from '../types';
 import { calculateIndicators, findRecentSwingLow } from '../utils/technicalIndicators';
-import { Layers, Eye, EyeOff, Maximize2 } from 'lucide-react';
+import { Layers, Eye, EyeOff, Maximize2, ExternalLink } from 'lucide-react';
+import { getYahooFinanceChartUrl } from '../utils/marketUrls';
 
 interface TradingViewChartProps {
   candles: CandleData[];
@@ -307,6 +308,22 @@ export default function TradingViewChart({
                 Market is Open
               </span>
             )}
+
+            {/* Open Chart in Yahoo Finance Button */}
+            {setup?.symbol && (
+              <a
+                href={getYahooFinanceChartUrl(setup.symbol)}
+                target="_blank"
+                rel="noopener noreferrer"
+                id="btn-yahoo-finance-chart-hud"
+                title={`Open ${setup.symbol} live interactive chart on Yahoo Finance (new window)`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-purple-950/70 hover:bg-purple-900 text-purple-200 border border-purple-800/80 hover:border-purple-600 transition-colors shadow-sm cursor-pointer"
+              >
+                <span className="font-black text-[10px] bg-purple-600 text-white px-1 py-0.2 rounded leading-tight">Y!</span>
+                <span className="hidden sm:inline">Yahoo Finance</span>
+                <ExternalLink className="w-3 h-3 text-purple-300" />
+              </a>
+            )}
           </div>
 
           {activeCandle && (
@@ -399,6 +416,20 @@ export default function TradingViewChart({
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
+
+          {setup?.symbol && (
+            <a
+              href={getYahooFinanceChartUrl(setup.symbol)}
+              target="_blank"
+              rel="noopener noreferrer"
+              id="btn-yahoo-chart-toolbar-icon"
+              title={`Open ${setup.symbol} interactive chart on Yahoo Finance`}
+              className="p-1.5 rounded border border-purple-900/60 bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 hover:text-purple-100 transition-colors flex items-center gap-1 text-[11px] font-mono"
+            >
+              <span className="font-black text-[9px] bg-purple-600 text-white px-1 rounded leading-none">Y!</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
         </div>
       </div>
 

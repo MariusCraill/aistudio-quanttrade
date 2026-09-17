@@ -248,7 +248,7 @@ export function calculateMarketStatus(exchange: 'JSE' | 'US'): MarketStatusInfo 
 /**
  * Fetches real, non-simulated market candles from backend or fallback dataset
  */
-export async function fetchAssetCandles(symbol: string): Promise<{
+export async function fetchAssetCandles(symbol: string, refresh = false): Promise<{
   candles: CandleData[];
   symbol: string;
   name: string;
@@ -264,7 +264,8 @@ export async function fetchAssetCandles(symbol: string): Promise<{
   const localStatus = calculateMarketStatus(exchange);
 
   try {
-    const res = await fetch(`/api/market/candles/${encodeURIComponent(normSymbol)}`);
+    const url = `/api/market/candles/${encodeURIComponent(normSymbol)}${refresh ? '?refresh=true' : ''}`;
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
       if (data.candles && data.candles.length > 0) {
@@ -317,12 +318,12 @@ export async function fetchAssetCandles(symbol: string): Promise<{
 }
 
 /**
- * Builds all initial trade setups from real market assets
+ * Builds all trade setups from real market assets
  */
-export function buildRealMarketSetups(): TradeSetup[] {
+export function buildRealMarketSetups(assets: RealMarketAsset[] = REAL_MARKET_ASSETS): TradeSetup[] {
   const list: TradeSetup[] = [];
 
-  for (const asset of REAL_MARKET_ASSETS) {
+  for (const asset of assets) {
     const status = calculateMarketStatus(asset.exchange);
     const setup = analyzeCandleSetup(
       asset.symbol,

@@ -158,9 +158,21 @@ export default function App() {
   }, [selectedSymbol, allAssets]);
 
   // Scanned setups from all assets
-  const scannedSetups: TradeSetup[] = useMemo(() => {
-    return buildRealMarketSetups();
-  }, []);
+  const [scannedSetups, setScannedSetups] = useState<TradeSetup[]>(() => buildRealMarketSetups(REAL_MARKET_ASSETS));
+
+  // Auto-refresh interval setting (default 30 minutes)
+  const [autoRefreshMinutes, setAutoRefreshMinutes] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('tradequant_auto_refresh_mins');
+      return saved !== null ? Number(saved) : 30;
+    } catch {
+      return 30;
+    }
+  });
+
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+  const [isRefreshingScan, setIsRefreshingScan] = useState<boolean>(false);
+  const [secondsUntilNextScan, setSecondsUntilNextScan] = useState<number>(autoRefreshMinutes * 60);
 
   // Compute active setup with real market metadata
   const computeSetupForAsset = useCallback((asset: RealMarketAsset, stopType: any = 'ATR_2X', horizon: any = 'SWING'): TradeSetup | null => {
@@ -203,6 +215,74 @@ export default function App() {
       setActiveSetup(updated);
     }
   }, [currentAsset, computeSetupForAsset]);
+
+  // Keep scannedSetups in sync if allAssets changes (e.g. user adds custom ticker)
+  useEffect(() => {
+    setScannedSetups(buildRealMarketSetups(allAssets));
+  }, [allAssets]);
+
+  // Function to refresh the market scanner candidates and active market feeds
+  const handleRefreshScan = useCallback(async (manual = true) => {
+    setIsRefreshingScan(true);
+    try {
+      // 1. Rebuild setups across all assets in the universe
+      const updatedSetups = buildRealMarketSetups(allAssets);
+      setScannedSetups(updatedSetups);
+
+      // 2. Refresh active setup for current ticker
+      const refreshedActive = computeSetupForAsset(
+        currentAsset,
+        activeSetup?.stopLossType ?? 'ATR_2X',
+        activeSetup?.horizon ?? 'SWING'
+      );
+      if (refreshedActive) {
+        setActiveSetup(refreshedActive);
+      }
+
+      // 3. Trigger fresh ATR Volatility Alert Radar evaluation
+      const freshRadar = await fetchLiveVolatilityAlerts(undefined, manual);
+      setVolatilityRadarReport(freshRadar);
+
+      // 4. Update timestamps and countdown
+      setLastRefreshedAt(new Date());
+      if (autoRefreshMinutes > 0) {
+        setSecondsUntilNextScan(autoRefreshMinutes * 60);
+      }
+    } catch (err) {
+      console.error('Error during scan refresh:', err);
+    } finally {
+      setIsRefreshingScan(false);
+    }
+  }, [allAssets, currentAsset, activeSetup, computeSetupForAsset, autoRefreshMinutes]);
+
+  // 30-minute automatic scan refresh interval timer
+  useEffect(() => {
+    if (autoRefreshMinutes <= 0) return;
+
+    const timer = setInterval(() => {
+      setSecondsUntilNextScan(prev => {
+        if (prev <= 1) {
+          // Trigger automatic 30-min scan refresh
+          handleRefreshScan(false);
+          return autoRefreshMinutes * 60;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [autoRefreshMinutes, handleRefreshScan]);
+
+  // Handle user changing auto-refresh interval (e.g. 30m, 15m, 5m, off)
+  const handleChangeAutoRefreshMinutes = (minutes: number) => {
+    setAutoRefreshMinutes(minutes);
+    setSecondsUntilNextScan(minutes * 60);
+    try {
+      localStorage.setItem('tradequant_auto_refresh_mins', minutes.toString());
+    } catch (e) {
+      console.warn('Failed to save auto refresh preference:', e);
+    }
+  };
 
   // Handle custom ticker search via Yahoo Finance proxy
   const handleSearchCustomTicker = async (ticker: string) => {
@@ -355,15 +435,13 @@ export default function App() {
               setups={scannedSetups}
               selectedSetupId={activeSetup?.id ?? null}
               onSelectSetup={handleSelectSetupFromScanner}
-              onRefreshScan={() => {
-                const refreshed = computeSetupForAsset(
-                  currentAsset,
-                  activeSetup?.stopLossType ?? 'ATR_2X',
-                  activeSetup?.horizon ?? 'SWING'
-                );
-                if (refreshed) setActiveSetup(refreshed);
-              }}
+              onRefreshScan={() => handleRefreshScan(true)}
               initialExchangeFilter={marketFilter}
+              isRefreshing={isRefreshingScan}
+              lastRefreshedAt={lastRefreshedAt}
+              autoRefreshMinutes={autoRefreshMinutes}
+              onChangeAutoRefreshMinutes={handleChangeAutoRefreshMinutes}
+              nextAutoRefreshSeconds={secondsUntilNextScan}
             />
           </div>
         )}

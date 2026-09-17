@@ -17,7 +17,9 @@ import {
   CheckCircle2,
   Calendar,
   Zap,
+  ExternalLink,
 } from 'lucide-react';
+import { getYahooFinanceChartUrl } from '../utils/marketUrls';
 
 interface MarketScannerProps {
   setups: TradeSetup[];
@@ -25,6 +27,11 @@ interface MarketScannerProps {
   onSelectSetup: (setup: TradeSetup) => void;
   onRefreshScan: () => void;
   initialExchangeFilter?: 'ALL' | 'JSE' | 'US';
+  isRefreshing?: boolean;
+  lastRefreshedAt?: Date;
+  autoRefreshMinutes?: number;
+  onChangeAutoRefreshMinutes?: (minutes: number) => void;
+  nextAutoRefreshSeconds?: number;
 }
 
 export default function MarketScanner({
@@ -33,6 +40,11 @@ export default function MarketScanner({
   onSelectSetup,
   onRefreshScan,
   initialExchangeFilter = 'ALL',
+  isRefreshing = false,
+  lastRefreshedAt,
+  autoRefreshMinutes = 30,
+  onChangeAutoRefreshMinutes,
+  nextAutoRefreshSeconds,
 }: MarketScannerProps) {
   const [filterType, setFilterType] = useState<'ALL' | SetupType | 'HIGH_CONFLUENCE' | 'ATR_SURGE'>('ALL');
   const [exchangeFilter, setExchangeFilter] = useState<'ALL' | 'JSE' | 'US'>(initialExchangeFilter);
@@ -42,6 +54,18 @@ export default function MarketScanner({
   const [aiRankings, setAiRankings] = useState<AIRankedTradeOption[] | null>(null);
   const [isAiRankingLoading, setIsAiRankingLoading] = useState(false);
   const [showAiTopPicksOnly, setShowAiTopPicksOnly] = useState(false);
+
+  // Time formatter for countdown
+  const formatCountdown = (secs?: number): string => {
+    if (secs === undefined || secs === null || secs <= 0) return '0m 00s';
+    const mins = Math.floor(secs / 60);
+    const remainder = secs % 60;
+    return `${mins}m ${remainder < 10 ? '0' : ''}${remainder}s`;
+  };
+
+  const formattedLastRefresh = lastRefreshedAt
+    ? lastRefreshedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : 'Live';
 
   // Precompute target duration estimates for all setups for fast rendering
   const durationMap = useMemo(() => {
@@ -166,13 +190,50 @@ export default function MarketScanner({
             </button>
           )}
 
+          {/* Auto-Refresh Interval Selector */}
+          <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs">
+            <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span className="text-slate-400 hidden sm:inline text-[11px]">Auto:</span>
+            <select
+              id="select-auto-refresh-interval"
+              value={autoRefreshMinutes}
+              onChange={e => onChangeAutoRefreshMinutes?.(Number(e.target.value))}
+              className="bg-transparent text-xs font-mono font-bold text-cyan-300 focus:outline-none cursor-pointer"
+            >
+              <option value={30} className="bg-slate-900 text-slate-100">Every 30 mins (Default)</option>
+              <option value={15} className="bg-slate-900 text-slate-100">Every 15 mins</option>
+              <option value={5} className="bg-slate-900 text-slate-100">Every 5 mins</option>
+              <option value={1} className="bg-slate-900 text-slate-100">Every 1 min</option>
+              <option value={0} className="bg-slate-900 text-slate-100">Off (Manual only)</option>
+            </select>
+          </div>
+
+          {/* Countdown badge when active */}
+          {autoRefreshMinutes > 0 && (
+            <div
+              className="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-950/50 border border-emerald-800/60 text-emerald-300 text-xs font-mono"
+              title={`Auto scan running every ${autoRefreshMinutes} minutes`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Next: {formatCountdown(nextAutoRefreshSeconds ?? autoRefreshMinutes * 60)}</span>
+            </div>
+          )}
+
+          {/* Manual Refresh Scan Button */}
           <button
+            id="btn-scan-refresh"
             onClick={onRefreshScan}
-            title="Refresh Scan"
-            className="p-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
+            disabled={isRefreshing}
+            title={`Refresh scan candidates from live exchange feeds (Last updated: ${formattedLastRefresh})`}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-700/80 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+            <span>{isRefreshing ? 'Scanning...' : 'Scan Refresh'}</span>
           </button>
+
+          <span className="text-[10px] text-slate-500 font-mono hidden xl:inline" title="Timestamp of last market scan">
+            {formattedLastRefresh}
+          </span>
         </div>
       </div>
 
@@ -556,20 +617,35 @@ export default function MarketScanner({
 
                   {/* Action */}
                   <td className="py-3 px-4 text-center">
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        onSelectSetup(setup);
-                      }}
-                      className={`px-2.5 py-1 rounded text-xs font-sans font-medium flex items-center gap-1 mx-auto transition-colors cursor-pointer ${
-                        isSelected
-                          ? 'bg-cyan-500 text-slate-950 font-bold'
-                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                      }`}
-                    >
-                      Analyze
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <button
+                        onClick={e => {
+                          e.stopPropagation();
+                          onSelectSetup(setup);
+                        }}
+                        className={`px-2.5 py-1 rounded text-xs font-sans font-medium flex items-center gap-1 transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-cyan-500 text-slate-950 font-bold'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                        }`}
+                      >
+                        Analyze
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Yahoo Finance Chart link */}
+                      <a
+                        href={getYahooFinanceChartUrl(setup.symbol)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        title={`Open ${setup.symbol} chart in Yahoo Finance`}
+                        className="p-1 rounded bg-purple-950/70 hover:bg-purple-900 border border-purple-800/80 text-purple-300 hover:text-purple-100 transition-colors flex items-center gap-0.5 text-[11px]"
+                      >
+                        <span className="font-black text-[9px] bg-purple-600 text-white px-1 rounded leading-none">Y!</span>
+                        <ExternalLink className="w-3 h-3 text-purple-300" />
+                      </a>
+                    </div>
                   </td>
                 </tr>
               );
