@@ -1,4 +1,4 @@
-import { CandleData, CalculatedIndicators, VolatilityAlert, VolatilityAlertSeverity, VolatilitySignalType } from '../types';
+import { CandleData, CalculatedIndicators, VolatilityAlert, VolatilityAlertSeverity, VolatilitySignalType, LiveIndicatorValues } from '../types';
 
 export function calculateSMA(data: number[], period: number): (number | null)[] {
   const result: (number | null)[] = [];
@@ -429,5 +429,199 @@ export function evaluateVolatilitySurge(
     surgePercent,
     isSurgeActive,
     history,
+  };
+}
+
+/**
+ * Calculates Exponential Moving Average (EMA)
+ */
+export function calculateEMA(data: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = [];
+  if (data.length === 0) return result;
+
+  const multiplier = 2 / (period + 1);
+  let prevEma: number | null = null;
+
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      result.push(null);
+      continue;
+    }
+
+    if (prevEma === null) {
+      // First EMA is SMA of initial `period` values
+      let sum = 0;
+      for (let j = 0; j < period; j++) {
+        sum += data[i - j];
+      }
+      prevEma = sum / period;
+      result.push(Number(prevEma.toFixed(2)));
+    } else {
+      prevEma = (data[i] - prevEma) * multiplier + prevEma;
+      result.push(Number(prevEma.toFixed(2)));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Calculates MACD Line (12 EMA - 26 EMA), Signal Line (9 EMA of MACD Line), and Histogram
+ */
+export function calculateMACD(
+  closes: number[],
+  fastPeriod = 12,
+  slowPeriod = 26,
+  signalPeriod = 9
+): {
+  macdLine: (number | null)[];
+  signalLine: (number | null)[];
+  histogram: (number | null)[];
+} {
+  const fastEma = calculateEMA(closes, fastPeriod);
+  const slowEma = calculateEMA(closes, slowPeriod);
+
+  const macdLine: (number | null)[] = [];
+  const validMacdValues: number[] = [];
+  const validMacdIndices: number[] = [];
+
+  for (let i = 0; i < closes.length; i++) {
+    const fast = fastEma[i];
+    const slow = slowEma[i];
+    if (fast !== null && slow !== null) {
+      const diff = Number((fast - slow).toFixed(3));
+      macdLine.push(diff);
+      validMacdValues.push(diff);
+      validMacdIndices.push(i);
+    } else {
+      macdLine.push(null);
+    }
+  }
+
+  // Calculate signal line as EMA of MACD line
+  const signalEma = calculateEMA(validMacdValues, signalPeriod);
+  const signalLine: (number | null)[] = new Array(closes.length).fill(null);
+  const histogram: (number | null)[] = new Array(closes.length).fill(null);
+
+  for (let j = 0; j < validMacdIndices.length; j++) {
+    const origIdx = validMacdIndices[j];
+    const sigVal = signalEma[j];
+    if (sigVal !== null) {
+      signalLine[origIdx] = sigVal;
+      const mVal = macdLine[origIdx]!;
+      histogram[origIdx] = Number((mVal - sigVal).toFixed(3));
+    }
+  }
+
+  return { macdLine, signalLine, histogram };
+}
+
+/**
+ * Computes a unified snapshot of live technical indicators for the current candle feed
+ */
+export function calculateLiveIndicatorSnapshot(candles: CandleData[]): LiveIndicatorValues {
+  if (candles.length === 0) {
+    return {
+      rsi14: 50,
+      rsiStatus: 'NEUTRAL',
+      ema9: 0,
+      ema21: 0,
+      emaAlignment: 'NEUTRAL',
+      sma200: null,
+      trendRegime: 'BULL_MARKET',
+      macdLine: 0,
+      macdSignal: 0,
+      macdHist: 0,
+      macdMomentum: 'WEAKENING',
+      atr14: 1,
+      atrPercent: 1.5,
+      volumeRatio20: 1.0,
+      currentPrice: 0,
+      priceChangePercent: 0,
+    };
+  }
+
+  const closes = candles.map(c => c.close);
+  const volumes = candles.map(c => c.volume);
+  const lastIndex = candles.length - 1;
+  const currentCandle = candles[lastIndex];
+  const prevCandle = lastIndex > 0 ? candles[lastIndex - 1] : currentCandle;
+
+  // Price change
+  const currentPrice = currentCandle.close;
+  const priceChangePercent = prevCandle.close > 0
+    ? Number((((currentPrice - prevCandle.close) / prevCandle.close) * 100).toFixed(2))
+    : 0;
+
+  // RSI(14)
+  const rsiValues = calculateRSI(candles, 14);
+  const rsi14 = rsiValues[lastIndex] ?? 50;
+  let rsiStatus: LiveIndicatorValues['rsiStatus'] = 'NEUTRAL';
+  if (rsi14 <= 32) rsiStatus = 'OVERSOLD';
+  else if (rsi14 >= 68) rsiStatus = 'OVERBOUGHT';
+  else if (rsi14 >= 52) rsiStatus = 'BULLISH';
+  else if (rsi14 <= 45) rsiStatus = 'BEARISH';
+
+  // EMA 9 & EMA 21
+  const ema9Values = calculateEMA(closes, 9);
+  const ema21Values = calculateEMA(closes, 21);
+  const ema9 = ema9Values[lastIndex] ?? currentPrice;
+  const ema21 = ema21Values[lastIndex] ?? currentPrice;
+  let emaAlignment: LiveIndicatorValues['emaAlignment'] = 'NEUTRAL';
+  if (ema9 > ema21 * 1.002) emaAlignment = 'BULLISH_STACK';
+  else if (ema9 < ema21 * 0.998) emaAlignment = 'BEARISH_STACK';
+
+  // 200 SMA (or 50 SMA fallback if < 200 bars)
+  const sma200Values = calculateSMA(closes, 200);
+  const sma50Values = calculateSMA(closes, 50);
+  const sma200 = sma200Values[lastIndex] ?? sma50Values[lastIndex] ?? null;
+  const trendRegime: LiveIndicatorValues['trendRegime'] =
+    sma200 !== null && currentPrice >= sma200 ? 'BULL_MARKET' : 'BEAR_MARKET';
+
+  // MACD
+  const { macdLine: ml, signalLine: sl, histogram: hl } = calculateMACD(closes);
+  const macdLine = ml[lastIndex] ?? 0;
+  const macdSignal = sl[lastIndex] ?? 0;
+  const macdHist = hl[lastIndex] ?? 0;
+  const prevHist = lastIndex > 0 ? (hl[lastIndex - 1] ?? 0) : 0;
+
+  let macdMomentum: LiveIndicatorValues['macdMomentum'] = 'WEAKENING';
+  if (macdHist > 0 && prevHist <= 0) {
+    macdMomentum = 'BULLISH_CROSS';
+  } else if (macdHist < 0 && prevHist >= 0) {
+    macdMomentum = 'BEARISH_CROSS';
+  } else if (macdHist > 0 && macdHist >= prevHist) {
+    macdMomentum = 'EXPANDING_MOMENTUM';
+  } else {
+    macdMomentum = 'WEAKENING';
+  }
+
+  // ATR(14) & Volatility %
+  const atrValues = calculateATR(candles, 14);
+  const atr14 = atrValues[lastIndex] ?? Number((currentPrice * 0.02).toFixed(2));
+  const atrPercent = currentPrice > 0 ? Number(((atr14 / currentPrice) * 100).toFixed(2)) : 2.0;
+
+  // Volume 20 SMA ratio
+  const volSmaValues = calculateSMA(volumes, 20);
+  const volSma = volSmaValues[lastIndex] ?? currentCandle.volume;
+  const volumeRatio20 = volSma > 0 ? Number((currentCandle.volume / volSma).toFixed(2)) : 1.0;
+
+  return {
+    rsi14,
+    rsiStatus,
+    ema9,
+    ema21,
+    emaAlignment,
+    sma200,
+    trendRegime,
+    macdLine,
+    macdSignal,
+    macdHist,
+    macdMomentum,
+    atr14,
+    atrPercent,
+    volumeRatio20,
+    currentPrice,
+    priceChangePercent,
   };
 }

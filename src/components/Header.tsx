@@ -12,10 +12,15 @@ import {
   AlertCircle,
   Zap,
   ExternalLink,
+  Volume2,
+  VolumeX,
+  Sparkles,
 } from 'lucide-react';
 import { MarketStatusInfo } from '../types';
 import { calculateMarketStatus } from '../services/marketDataService';
 import { getYahooFinanceChartUrl } from '../utils/marketUrls';
+import { isSoundAlertsEnabled, toggleSoundAlerts, subscribeToSoundAlerts } from '../services/audioAlertService';
+import { isAiLiveMonitorEnabled, toggleAiLiveMonitor, subscribeToAiMonitorState } from '../services/aiLiveSignalService';
 
 export interface HeaderAssetOption {
   symbol: string;
@@ -25,8 +30,8 @@ export interface HeaderAssetOption {
 }
 
 interface HeaderProps {
-  activeTab: 'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL';
-  onSelectTab: (tab: 'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL') => void;
+  activeTab: 'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL' | 'RADAR';
+  onSelectTab: (tab: 'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL' | 'RADAR') => void;
   assets: HeaderAssetOption[];
   selectedSymbol: string;
   onSelectSymbol: (symbol: string) => void;
@@ -59,6 +64,18 @@ export default function Header({
   const [usStatus, setUsStatus] = useState<MarketStatusInfo>(() => calculateMarketStatus('US'));
   const [customTickerInput, setCustomTickerInput] = useState('');
   const [showSearchModal, setShowSearchModal] = useState(false);
+  const [isSoundOn, setIsSoundOn] = useState<boolean>(() => isSoundAlertsEnabled());
+  const [isAiMonitorOn, setIsAiMonitorOn] = useState<boolean>(() => isAiLiveMonitorEnabled());
+
+  // Listen to sound and AI state updates
+  useEffect(() => {
+    const unsubSound = subscribeToSoundAlerts(enabled => setIsSoundOn(enabled));
+    const unsubAi = subscribeToAiMonitorState(enabled => setIsAiMonitorOn(enabled));
+    return () => {
+      unsubSound();
+      unsubAi();
+    };
+  }, []);
 
   // Update clocks and open/closed status every 10 seconds
   useEffect(() => {
@@ -171,6 +188,32 @@ export default function Header({
               </span>
             )}
           </button>
+
+          {/* SECOND PAGE TAB: ATR Radar & Live AI Monitor */}
+          <button
+            id="tab-radar-page"
+            onClick={() => onSelectTab('RADAR')}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all ${
+              activeTab === 'RADAR'
+                ? 'bg-gradient-to-r from-amber-500 to-amber-400 text-slate-950 font-black shadow-md shadow-amber-500/25 ring-1 ring-amber-400'
+                : 'text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 border border-transparent hover:border-amber-800/60'
+            }`}
+            title="Open Dedicated ATR Volatility Radar & Live AI Monitor Page"
+          >
+            <Zap className={`w-3.5 h-3.5 ${activeTab === 'RADAR' ? 'text-slate-950' : 'text-amber-400 animate-pulse'}`} />
+            <span className="font-bold">ATR Radar &amp; AI Monitor</span>
+            {activeSurgeCount > 0 && (
+              <span
+                className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono font-black ${
+                  activeTab === 'RADAR'
+                    ? 'bg-slate-950 text-amber-300'
+                    : 'bg-amber-500 text-slate-950 animate-pulse'
+                }`}
+              >
+                {activeSurgeCount}
+              </span>
+            )}
+          </button>
         </nav>
 
         {/* Right Action Tools: Market Filter, Ticker Selector, Custom Search & Guide */}
@@ -254,6 +297,47 @@ export default function Header({
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-2" />
             </div>
           </form>
+
+          {/* AI Live Monitor Sentinel Toggle */}
+          <button
+            id="header-toggle-ai-sentinel"
+            onClick={() => {
+              toggleAiLiveMonitor();
+            }}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              isAiMonitorOn
+                ? 'border-cyan-500/60 bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                : 'border-slate-800 bg-slate-900/80 hover:bg-slate-800 text-slate-400'
+            }`}
+            title={isAiMonitorOn ? 'AI Live Signals are ACTIVE (Click to switch OFF)' : 'AI Live Signals are OFF (Click to switch ON)'}
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${isAiMonitorOn ? 'text-cyan-400 animate-pulse' : 'text-slate-500'}`} />
+            <span className="hidden sm:inline">AI Live</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isAiMonitorOn ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'}`} />
+          </button>
+
+          {/* Sound Alerts Switch */}
+          <button
+            id="header-toggle-audio-alerts"
+            onClick={() => {
+              toggleSoundAlerts();
+            }}
+            className={`px-2 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+              isSoundOn
+                ? 'border-emerald-500/50 bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-300'
+                : 'border-slate-800 bg-slate-900/80 hover:bg-slate-800 text-slate-500'
+            }`}
+            title={isSoundOn ? 'Alert Audio Sounds are ON (Click to Mute)' : 'Alert Audio Sounds are MUTED (Click to Enable)'}
+          >
+            {isSoundOn ? (
+              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <VolumeX className="w-3.5 h-3.5 text-slate-500" />
+            )}
+            <span className="hidden md:inline text-[11px] font-mono">
+              {isSoundOn ? 'Sound' : 'Muted'}
+            </span>
+          </button>
 
           {/* Real-Time Volatility Alert Radar Trigger */}
           <button

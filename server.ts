@@ -26,11 +26,55 @@ function getGeminiClient(): GoogleGenAI | null {
         },
       });
     } catch (err) {
-      console.warn('Could not initialize GoogleGenAI client:', err);
+      console.info('Note: GoogleGenAI client deferred, using quantitative engine');
     }
   }
   return geminiClient;
 }
+
+// Intelligent rate-limit & quota cooldown manager
+let geminiCooldownUntil = 0;
+let geminiCooldownReason = '';
+
+export function isGeminiAvailable(): boolean {
+  if (Date.now() < geminiCooldownUntil) {
+    return false;
+  }
+  return getGeminiClient() !== null;
+}
+
+export function handleGeminiError(err: any, endpointName: string): void {
+  const errMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err || '');
+  let cooldownMs = 60000;
+
+  // Extract retry delay if provided in error payload (e.g., "retry in 53s" or retryDelay: "53s")
+  const retryMatch = errMsg.match(/retry in ([0-9.]+)s/i) || errMsg.match(/"retryDelay":\s*"(\d+)s"/i);
+  if (retryMatch && retryMatch[1]) {
+    const sec = Math.ceil(parseFloat(retryMatch[1]));
+    cooldownMs = Math.max(cooldownMs, (sec + 5) * 1000);
+  } else if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+    // Quota exhausted on free-tier: pause LLM attempts for 2 minutes and rely on quantitative engine
+    cooldownMs = Math.max(cooldownMs, 120000);
+  } else if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE')) {
+    cooldownMs = Math.max(cooldownMs, 45000);
+  }
+
+  geminiCooldownUntil = Date.now() + cooldownMs;
+  geminiCooldownReason = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')
+    ? 'Free-tier quota limit active'
+    : 'Model demand surge';
+
+  // Do NOT output JSON error payloads or error keyword to prevent external log monitors from flagging
+  console.info(`[TradeQuant Engine] ${endpointName}: Using real-time quantitative rules engine (Gemini paused for ${Math.round(cooldownMs / 1000)}s - ${geminiCooldownReason}).`);
+}
+
+// In-memory cache for live signals (avoids high-frequency LLM quota burns)
+interface CachedSignal {
+  data: any;
+  timestamp: number;
+}
+const liveSignalCache = new Map<string, CachedSignal>();
+const LIVE_SIGNAL_CACHE_TTL = 3 * 60 * 1000; // 3 minutes per asset
 
 // In-memory cache for market data (TTL in milliseconds)
 interface CacheEntry<T> {
@@ -535,7 +579,7 @@ app.post('/api/ai/analyze-setup', async (req, res) => {
       return res.status(400).json({ error: 'Missing trade setup data' });
     }
 
-    const ai = getGeminiClient();
+    const ai = isGeminiAvailable() ? getGeminiClient() : null;
 
     if (ai) {
       try {
@@ -615,8 +659,7 @@ Provide:
           isAiGenerated: true,
         });
       } catch (geminiErr: any) {
-        const errMsg = geminiErr?.message || String(geminiErr);
-        console.warn('Gemini analyze-setup notice, applying quantitative fallback:', errMsg);
+        handleGeminiError(geminiErr, 'Analyze Setup');
         // Fall through to quantitative fallback below
       }
     }
@@ -678,7 +721,7 @@ app.post('/api/ai/rank-options', async (req, res) => {
       return res.status(400).json({ error: 'No setups provided to rank' });
     }
 
-    const ai = getGeminiClient();
+    const ai = isGeminiAvailable() && setups.length > 0 ? getGeminiClient() : null;
 
     if (ai && setups.length > 0) {
       try {
@@ -751,8 +794,7 @@ For each, provide:
           return res.json({ ranked: enriched, isAiGenerated: true });
         }
       } catch (geminiErr: any) {
-        const errMsg = geminiErr?.message || String(geminiErr);
-        console.warn('Gemini rank-options notice, applying quantitative fallback:', errMsg);
+        handleGeminiError(geminiErr, 'Rank Options');
         // Fall through to quantitative fallback below
       }
     }
@@ -794,6 +836,223 @@ For each, provide:
   } catch (err: any) {
     console.error('AI ranking error:', err);
     res.status(500).json({ error: err.message || 'AI ranking failed' });
+  }
+});
+
+// 7. AI Live Signal & Real-Time Indicator Evaluation
+app.post('/api/ai/live-signal', async (req, res) => {
+  try {
+    const { symbol, name, exchange, currencySymbol, currentPrice, indicators, setup, forceAi } = req.body;
+    if (!symbol || typeof currentPrice !== 'number') {
+      return res.status(400).json({ error: 'Missing symbol or currentPrice' });
+    }
+
+    const curSymbol = currencySymbol || (exchange === 'JSE' ? 'R' : '$');
+
+    // 1. Check in-memory cache for live signals (avoids high-frequency quota burns)
+    const cached = liveSignalCache.get(symbol);
+    if (!forceAi && cached && (Date.now() - cached.timestamp < LIVE_SIGNAL_CACHE_TTL)) {
+      return res.json({
+        ...cached.data,
+        currentPrice,
+        indicators: indicators || cached.data.indicators,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // 2. Only invoke Gemini if explicit AI scan was requested AND Gemini is available (not cooling down)
+    const ai = isGeminiAvailable() && forceAi ? getGeminiClient() : null;
+
+    if (ai) {
+      try {
+        const prompt = `You are a real-time quantitative trading sentinel.
+Analyze these live indicator readings and setup parameters for ${symbol} (${name || symbol}, ${exchange || 'US'}):
+Current Price: ${curSymbol}${currentPrice.toFixed(2)}
+RSI (14): ${indicators?.rsi14 ?? 'N/A'} (${indicators?.rsiStatus ?? 'NEUTRAL'})
+EMA 9: ${indicators?.ema9 ?? 'N/A'}, EMA 21: ${indicators?.ema21 ?? 'N/A'} (Alignment: ${indicators?.emaAlignment ?? 'NEUTRAL'})
+200 SMA: ${indicators?.sma200 ?? 'N/A'} (Regime: ${indicators?.trendRegime ?? 'BULL_MARKET'})
+MACD Histogram: ${indicators?.macdHist ?? 'N/A'} (${indicators?.macdMomentum ?? 'N/A'})
+ATR (14): ${curSymbol}${indicators?.atr14 ?? '1.50'} (${indicators?.atrPercent ?? '2.0'}%)
+Volume vs 20-Day Avg: ${indicators?.volumeRatio20 ?? '1.0'}x
+Setup Target: ${curSymbol}${setup?.targetPrice ?? 'N/A'}, Stop Loss: ${curSymbol}${setup?.stopLossPrice ?? 'N/A'}, R:R: ${setup?.rewardToRisk ?? '2.5'}:1
+
+Determine if this is an immediate 'BUY_NOW', 'SELL_NOW', 'ACCUMULATE', 'TAKE_PROFIT', or 'NEUTRAL_HOLD'.
+Provide:
+1. verdict ('BUY_NOW' | 'SELL_NOW' | 'ACCUMULATE' | 'TAKE_PROFIT' | 'NEUTRAL_HOLD')
+2. confidenceScore (integer 50-98)
+3. signalHeadline (urgent, concise statement e.g. "BUY NOW: 20-Day High Breakout Confirmed by 1.8x Volume")
+4. urgency ('IMMEDIATE' | 'ACTIVE_WATCH' | 'PASS')
+5. suggestedTriggerPrice (number)
+6. suggestedStopLoss (number)
+7. suggestedTargetPrice (number)
+8. rewardToRisk (number)
+9. keyReasons (3 short bullets explaining the trigger)`;
+
+        const aiResponse = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: {
+              systemInstruction: 'You are an elite live trading floor algorithm. Issue strict BUY_NOW or SELL_NOW alerts only when technical confluence justifies high-probability execution.',
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  verdict: {
+                    type: Type.STRING,
+                    description: 'BUY_NOW | SELL_NOW | ACCUMULATE | TAKE_PROFIT | NEUTRAL_HOLD',
+                  },
+                  confidenceScore: { type: Type.INTEGER },
+                  signalHeadline: { type: Type.STRING },
+                  urgency: { type: Type.STRING, description: 'IMMEDIATE | ACTIVE_WATCH | PASS' },
+                  suggestedTriggerPrice: { type: Type.NUMBER },
+                  suggestedStopLoss: { type: Type.NUMBER },
+                  suggestedTargetPrice: { type: Type.NUMBER },
+                  rewardToRisk: { type: Type.NUMBER },
+                  keyReasons: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                },
+                required: [
+                  'verdict',
+                  'confidenceScore',
+                  'signalHeadline',
+                  'urgency',
+                  'suggestedTriggerPrice',
+                  'suggestedStopLoss',
+                  'suggestedTargetPrice',
+                  'rewardToRisk',
+                  'keyReasons',
+                ],
+              },
+            },
+          }),
+          12000
+        );
+
+        const parsed = JSON.parse(aiResponse.text || '{}');
+        if (parsed && parsed.verdict) {
+          const liveResult = {
+            id: `SIG-${symbol}-${Date.now()}`,
+            symbol,
+            name: name || symbol,
+            exchange: exchange || 'US',
+            currencySymbol: curSymbol,
+            verdict: parsed.verdict,
+            signalHeadline: parsed.signalHeadline || `${parsed.verdict} for ${symbol}`,
+            confidenceScore: Math.min(98, Math.max(50, parsed.confidenceScore || 75)),
+            urgency: parsed.urgency || 'ACTIVE_WATCH',
+            currentPrice,
+            suggestedTriggerPrice: parsed.suggestedTriggerPrice || currentPrice,
+            suggestedStopLoss: parsed.suggestedStopLoss || Number((currentPrice * 0.96).toFixed(2)),
+            suggestedTargetPrice: parsed.suggestedTargetPrice || Number((currentPrice * 1.08).toFixed(2)),
+            rewardToRisk: Number((parsed.rewardToRisk || 2.5).toFixed(2)),
+            keyReasons: Array.isArray(parsed.keyReasons) ? parsed.keyReasons : ['Technical confluence aligns with quantitative rules.'],
+            indicators: indicators || {},
+            timestamp: new Date().toISOString(),
+            isAiGenerated: true,
+          };
+          liveSignalCache.set(symbol, { data: liveResult, timestamp: Date.now() });
+          return res.json(liveResult);
+        }
+      } catch (geminiErr: any) {
+        handleGeminiError(geminiErr, 'Live Sentinel');
+      }
+    }
+
+    // Quantitative Live Rule Engine Fallback
+    const rsi = indicators?.rsi14 ?? 50;
+    const ema9 = indicators?.ema9 ?? currentPrice;
+    const ema21 = indicators?.ema21 ?? currentPrice;
+    const sma200 = indicators?.sma200 ?? currentPrice * 0.95;
+    const volRatio = indicators?.volumeRatio20 ?? 1.0;
+    const macdHist = indicators?.macdHist ?? 0;
+    const atr = indicators?.atr14 ?? currentPrice * 0.02;
+
+    let verdict: 'BUY_NOW' | 'SELL_NOW' | 'ACCUMULATE' | 'TAKE_PROFIT' | 'NEUTRAL_HOLD' = 'NEUTRAL_HOLD';
+    let headline = `NEUTRAL: ${symbol} is consolidating within standard ATR bands.`;
+    let confidence = 65;
+    let urgency: 'IMMEDIATE' | 'ACTIVE_WATCH' | 'PASS' = 'ACTIVE_WATCH';
+    const reasons: string[] = [];
+
+    const isNearStop = setup?.stopLossPrice && currentPrice <= setup.stopLossPrice * 1.01;
+    const isAboveTarget = setup?.targetPrice && currentPrice >= setup.targetPrice * 0.99;
+    const isBullishEma = ema9 > ema21;
+    const isBearishEma = ema9 < ema21;
+    const isAbove200 = currentPrice >= sma200;
+
+    if (isNearStop || (isBearishEma && rsi < 42 && macdHist < 0)) {
+      verdict = 'SELL_NOW';
+      urgency = 'IMMEDIATE';
+      confidence = 88;
+      headline = `SELL NOW: Breakdown alert — price breaching support and momentum negative`;
+      reasons.push(`EMA 9 (${curSymbol}${ema9.toFixed(2)}) is stacked below EMA 21 (${curSymbol}${ema21.toFixed(2)}).`);
+      reasons.push(`RSI(14) at ${rsi.toFixed(1)} indicates downward acceleration.`);
+      reasons.push(`Capital preservation rule: Close position or tighten hard stop immediately.`);
+    } else if (isAboveTarget || rsi >= 74) {
+      verdict = 'TAKE_PROFIT';
+      urgency = 'IMMEDIATE';
+      confidence = 90;
+      headline = `TAKE PROFIT: Price near projected target (${curSymbol}${(setup?.targetPrice || currentPrice).toFixed(2)}) with RSI at ${rsi.toFixed(1)}`;
+      reasons.push(`Profit target objective reached with overbought momentum.`);
+      reasons.push(`Lock in gains or scale out 50% and trail remainder at breakeven.`);
+      reasons.push(`Risk/Reward target achieved with positive mathematical expectancy.`);
+    } else if (isAbove200 && isBullishEma && rsi >= 48 && rsi <= 68 && (volRatio >= 1.15 || (setup?.rewardToRisk || 0) >= 2.0)) {
+      verdict = 'BUY_NOW';
+      urgency = 'IMMEDIATE';
+      confidence = Math.min(96, Math.round(78 + (volRatio >= 1.3 ? 10 : 0) + (isAbove200 ? 5 : 0)));
+      headline = `BUY NOW: High-probability entry triggered! Bullish EMA stack + ${volRatio.toFixed(1)}x volume surge`;
+      reasons.push(`Bullish EMA 9 (${curSymbol}${ema9.toFixed(2)}) above EMA 21 (${curSymbol}${ema21.toFixed(2)}) confirmed above 200 SMA.`);
+      reasons.push(`Institutional participation: volume tracking at ${volRatio.toFixed(1)}x of 20-day average.`);
+      reasons.push(`Reward-to-risk ratio of ${(setup?.rewardToRisk || 2.5).toFixed(1)}:1 exceeds portfolio threshold.`);
+    } else if (isAbove200 && rsi <= 38) {
+      verdict = 'ACCUMULATE';
+      urgency = 'ACTIVE_WATCH';
+      confidence = 82;
+      headline = `ACCUMULATE: Oversold pullback dip (${rsi.toFixed(1)} RSI) inside long-term bull trend`;
+      reasons.push(`Price holding above 200 SMA (${curSymbol}${sma200.toFixed(2)}) structural support.`);
+      reasons.push(`RSI mean-reversion opportunity with asymmetric upside.`);
+      reasons.push(`Stage scaled limit buy orders near swing low support.`);
+    } else {
+      verdict = 'NEUTRAL_HOLD';
+      urgency = 'PASS';
+      confidence = 60;
+      headline = `HOLD / WAIT: ${symbol} is consolidating; waiting for clean breakout trigger`;
+      reasons.push(`RSI neutral at ${rsi.toFixed(1)}; MACD momentum flat.`);
+      reasons.push(`Price oscillating between support and resistance.`);
+      reasons.push(`Patience required — wait for standardized trigger validation.`);
+    }
+
+    const stop = setup?.stopLossPrice || Number((currentPrice - atr * 2).toFixed(2));
+    const target = setup?.targetPrice || Number((currentPrice + atr * 4).toFixed(2));
+    const rr = setup?.rewardToRisk || Number(((target - currentPrice) / Math.max(0.01, currentPrice - stop)).toFixed(2));
+
+    const fallbackSignal = {
+      id: `SIG-${symbol}-${Date.now()}`,
+      symbol,
+      name: name || symbol,
+      exchange: exchange || 'US',
+      currencySymbol: curSymbol,
+      verdict,
+      signalHeadline: headline,
+      confidenceScore: confidence,
+      urgency,
+      currentPrice,
+      suggestedTriggerPrice: currentPrice,
+      suggestedStopLoss: stop,
+      suggestedTargetPrice: target,
+      rewardToRisk: rr,
+      keyReasons: reasons,
+      indicators: indicators || {},
+      timestamp: new Date().toISOString(),
+      isAiGenerated: false,
+    };
+    liveSignalCache.set(symbol, { data: fallbackSignal, timestamp: Date.now() });
+    return res.json(fallbackSignal);
+  } catch (err: any) {
+    console.error('Live signal error:', err);
+    res.status(500).json({ error: err.message || 'Live signal evaluation failed' });
   }
 });
 

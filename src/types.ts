@@ -273,4 +273,52 @@ export interface VolatilityRadarReport {
   alerts: VolatilityAlert[];
 }
 
+export type LiveSignalVerdict =
+  | 'BUY_NOW'
+  | 'SELL_NOW'
+  | 'ACCUMULATE'
+  | 'TAKE_PROFIT'
+  | 'NEUTRAL_HOLD';
+
+export interface LiveIndicatorValues {
+  rsi14: number;
+  rsiStatus: 'OVERSOLD' | 'BULLISH' | 'NEUTRAL' | 'BEARISH' | 'OVERBOUGHT';
+  ema9: number;
+  ema21: number;
+  emaAlignment: 'BULLISH_STACK' | 'BEARISH_STACK' | 'NEUTRAL';
+  sma200: number | null;
+  trendRegime: 'BULL_MARKET' | 'BEAR_MARKET';
+  macdLine: number;
+  macdSignal: number;
+  macdHist: number;
+  macdMomentum: 'BULLISH_CROSS' | 'BEARISH_CROSS' | 'EXPANDING_MOMENTUM' | 'WEAKENING';
+  atr14: number;
+  atrPercent: number;
+  volumeRatio20: number;
+  currentPrice: number;
+  priceChangePercent: number;
+}
+
+export interface AILiveSignalAlert {
+  id: string;
+  symbol: string;
+  name: string;
+  exchange: 'JSE' | 'US';
+  currencySymbol: string;
+  verdict: LiveSignalVerdict;
+  signalHeadline: string;
+  confidenceScore: number; // 0-100
+  urgency: 'IMMEDIATE' | 'ACTIVE_WATCH' | 'PASS';
+  currentPrice: number;
+  suggestedTriggerPrice: number;
+  suggestedStopLoss: number;
+  suggestedTargetPrice: number;
+  rewardToRisk: number;
+  keyReasons: string[];
+  indicators: LiveIndicatorValues;
+  timestamp: string;
+  isAiGenerated: boolean;
+  soundPlayed?: boolean;
+}
+
 

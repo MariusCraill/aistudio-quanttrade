@@ -5,6 +5,46 @@ import { calculateMarketStatus } from './marketDataService';
 
 const MUTE_STORAGE_KEY = 'tradequant_volatility_alerts_muted';
 const DISMISSED_STORAGE_KEY = 'tradequant_volatility_alerts_dismissed';
+const RADAR_ENABLED_STORAGE_KEY = 'tradequant_volatility_radar_enabled';
+
+type RadarStateListener = (enabled: boolean) => void;
+const radarListeners: Set<RadarStateListener> = new Set();
+
+export function isAtrRadarEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const saved = localStorage.getItem(RADAR_ENABLED_STORAGE_KEY);
+    if (saved !== null) {
+      return saved === 'true';
+    }
+    return true; // Default ON
+  } catch {
+    return true;
+  }
+}
+
+export function setAtrRadarEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(RADAR_ENABLED_STORAGE_KEY, enabled.toString());
+  } catch (e) {
+    console.warn('Failed to save ATR radar preference:', e);
+  }
+  radarListeners.forEach(fn => fn(enabled));
+}
+
+export function toggleAtrRadar(): boolean {
+  const current = isAtrRadarEnabled();
+  const next = !current;
+  setAtrRadarEnabled(next);
+  return next;
+}
+
+export function subscribeToAtrRadarState(listener: RadarStateListener): () => void {
+  radarListeners.add(listener);
+  return () => {
+    radarListeners.delete(listener);
+  };
+}
 
 /**
  * Web Audio API synthesizer for clean, pleasant audio alert chimes
@@ -214,6 +254,7 @@ export function subscribeToVolatilityAlerts(
   let isMounted = true;
 
   const run = async () => {
+    if (!isAtrRadarEnabled()) return;
     try {
       const report = await fetchLiveVolatilityAlerts();
       if (isMounted) {

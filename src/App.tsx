@@ -6,6 +6,7 @@ import {
   CandleData,
   VolatilityRadarReport,
   VolatilityAlert,
+  AILiveSignalAlert,
 } from './types';
 import { REAL_MARKET_ASSETS, RealMarketAsset } from './data/realMarketData';
 import {
@@ -18,6 +19,7 @@ import {
   fetchLiveVolatilityAlerts,
   playVolatilityChime,
 } from './services/volatilityAlertService';
+import { subscribeToLiveSignalAlerts } from './services/aiLiveSignalService';
 import { analyzeCandleSetup } from './services/scannerService';
 import Header, { HeaderAssetOption } from './components/Header';
 import TradingViewChart from './components/TradingViewChart';
@@ -28,6 +30,9 @@ import TradeJournal from './components/TradeJournal';
 import StrategyFrameworkGuide from './components/StrategyFrameworkGuide';
 import VolatilityRadarModal from './components/VolatilityRadarModal';
 import VolatilityAlertToast from './components/VolatilityAlertToast';
+import LiveIndicatorsHUD from './components/LiveIndicatorsHUD';
+import LiveSignalAlertToast from './components/LiveSignalAlertToast';
+import AtrRadarLiveMonitorPage from './components/AtrRadarLiveMonitorPage';
 
 const LOCAL_STORAGE_KEY = 'tradequant_real_journal_entries';
 
@@ -71,7 +76,7 @@ const INITIAL_JOURNAL: SavedJournalEntry[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL'>('ANALYZER');
+  const [activeTab, setActiveTab] = useState<'ANALYZER' | 'SCANNER' | 'BACKTEST' | 'JOURNAL' | 'RADAR'>('ANALYZER');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('NPN.JO');
   const [marketFilter, setMarketFilter] = useState<'ALL' | 'JSE' | 'US'>('ALL');
   const [isGuideOpen, setIsGuideOpen] = useState(false);
@@ -100,6 +105,18 @@ export default function App() {
         }
       }
     }, 30000);
+    return () => unsubscribe();
+  }, []);
+
+  // Real-Time AI Live Buy/Sell Alert Toast State
+  const [liveSignalToast, setLiveSignalToast] = useState<AILiveSignalAlert | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToLiveSignalAlerts(alert => {
+      if (alert && (alert.verdict === 'BUY_NOW' || alert.verdict === 'SELL_NOW')) {
+        setLiveSignalToast(alert);
+      }
+    });
     return () => unsubscribe();
   }, []);
 
@@ -383,7 +400,7 @@ export default function App() {
         selectedSymbol={selectedSymbol}
         onSelectSymbol={sym => setSelectedSymbol(sym)}
         onOpenGuide={() => setIsGuideOpen(true)}
-        onOpenVolatilityRadar={() => setIsVolatilityModalOpen(true)}
+        onOpenVolatilityRadar={() => setActiveTab('RADAR')}
         activeSurgeCount={volatilityRadarReport?.activeSurgeCount ?? 0}
         journalCount={journalEntries.length}
         marketFilter={marketFilter}
@@ -410,6 +427,24 @@ export default function App() {
         {/* TAB 1: INTERACTIVE ANALYZER & CHARTING */}
         {activeTab === 'ANALYZER' && (
           <div className="flex flex-col gap-6 animate-in fade-in duration-150">
+            {/* AI Live Indicators, Sound Controls & Real-Time Alert Sentinel HUD */}
+            <LiveIndicatorsHUD
+              candles={currentAsset.data}
+              setup={activeSetup}
+              symbol={currentAsset.symbol}
+              name={currentAsset.name}
+              exchange={currentAsset.exchange}
+              currencySymbol={currentAsset.currencySymbol}
+              onApplySetupParameters={({ entry, stop, target }) => {
+                handleUpdateSetup({
+                  entryPrice: entry,
+                  stopLossPrice: stop,
+                  targetPrice: target,
+                  rewardToRisk: Number(((target - entry) / Math.max(0.01, entry - stop)).toFixed(2)),
+                });
+              }}
+            />
+
             {/* TradingView Candlestick Chart */}
             <TradingViewChart
               candles={currentAsset.data}
@@ -468,6 +503,22 @@ export default function App() {
             />
           </div>
         )}
+
+        {/* SECOND PAGE: DEDICATED ATR VOLATILITY RADAR & LIVE AI MONITOR */}
+        {activeTab === 'RADAR' && (
+          <div className="animate-in fade-in duration-150">
+            <AtrRadarLiveMonitorPage
+              allAssets={allAssets}
+              volatilityReport={volatilityRadarReport}
+              isLoadingReport={isVolatilityLoading}
+              onRefreshRadar={handleRefreshVolatilityRadar}
+              onSelectAssetForAnalyzer={sym => {
+                setSelectedSymbol(sym);
+                setActiveTab('ANALYZER');
+              }}
+            />
+          </div>
+        )}
       </main>
 
       {/* Strategy Framework Guide Modal */}
@@ -495,12 +546,23 @@ export default function App() {
         onDismiss={() => setActiveToastAlert(null)}
         onOpenRadar={() => {
           setActiveToastAlert(null);
-          setIsVolatilityModalOpen(true);
+          setActiveTab('RADAR');
         }}
         onAnalyze={sym => {
           setSelectedSymbol(sym);
           setActiveTab('ANALYZER');
           setActiveToastAlert(null);
+        }}
+      />
+
+      {/* Real-Time AI Live Buy/Sell Alert Toast with Sound Action */}
+      <LiveSignalAlertToast
+        alert={liveSignalToast}
+        onDismiss={() => setLiveSignalToast(null)}
+        onSelectSymbol={sym => {
+          setSelectedSymbol(sym);
+          setActiveTab('ANALYZER');
+          setLiveSignalToast(null);
         }}
       />
 
